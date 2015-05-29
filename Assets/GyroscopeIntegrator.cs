@@ -24,7 +24,7 @@ public class GyroscopeIntegrator : MonoBehaviour {
     List<AccelerometerDataEventArgs> accelerometerEvents = new List<AccelerometerDataEventArgs>();
 
     public void Start() {
-        thalmicMyo.internalMyo.GyroscopeData += gyroscopeReceived;
+        //thalmicMyo.internalMyo.GyroscopeData += gyroscopeReceived;
         thalmicMyo.internalMyo.AccelerometerData += accelerometerReceived;
     }
 
@@ -36,7 +36,7 @@ public class GyroscopeIntegrator : MonoBehaviour {
     AccelerometerDataEventArgs effectiveAccel;
 
     GyroscopeDataEventArgs prevGyro;
-    AccelerometerDataEventArgs prevAccel; //do I really need this? no, since I'm not 
+    AccelerometerDataEventArgs prevAccel;
 
     public void Update() {
         lock (_lock) {
@@ -113,7 +113,99 @@ public class GyroscopeIntegrator : MonoBehaviour {
 
 
             } else {
+                var gyroEnum = gyroscopeEvents.GetEnumerator();
+                var accelEnum = accelerometerEvents.GetEnumerator();
 
+                bool gyroHasNext = gyroEnum.MoveNext();
+                bool accelHasNext = accelEnum.MoveNext();
+
+                while (gyroHasNext || accelHasNext) {
+                    bool useGyro = false;
+                    bool useAccel = false;
+
+                    if (gyroHasNext && accelHasNext) {
+                        int gyroIsLater = DateTime.Compare(gyroEnum.Current.Timestamp, accelEnum.Current.Timestamp);
+                        if (gyroIsLater == 0) {
+                            // both are at the same time
+                            useGyro = true;
+                            useAccel = true;
+                        } else if (gyroIsLater > 0) {
+                            // accel is before
+                            useAccel = true;
+                        } else {
+                            // gyro is before
+                            useGyro = true;
+                        }
+                    } else {
+                        useGyro = gyroHasNext;
+                        useAccel = accelHasNext;
+                    }
+
+                    bool moveWithGyro = false;
+                    bool moveWithAccel = false;
+
+                    // by now, I should 
+                    // have the effective value for both
+                    // have the necessary one(s) advance
+
+                    if (useGyro) {
+                        prevGyro = effectiveGyro;
+                        effectiveGyro = gyroEnum.Current;
+                        gyroHasNext = gyroEnum.MoveNext();
+
+                        if (prevGyro != null) {
+                            moveWithGyro = true;
+                        }
+                    }
+
+                    if (useAccel) {
+                        prevAccel = effectiveAccel; 
+                        effectiveAccel = accelEnum.Current;
+                        accelHasNext = accelEnum.MoveNext();
+
+                        moveWithAccel = true;
+                    }
+
+                    if (moveWithGyro && moveWithAccel) {
+                        // TODO average the two and apply
+                        Debug.LogError("Events are not ordered. TODO order them!");
+                        throw new System.NotImplementedException();
+                    } else {
+                        if (moveWithAccel) {
+                            // TODO calculate and apply (time will go in here, will scale the contrib.)
+
+                            Debug.Log("move with accel");
+
+                            // currentup should always be Vector3.up
+                            // localaccelup should be the vector in local coords. this is what we read. 
+                            // accelup should be that vector in global space
+                            // this does not require matrix inversion. good. 
+
+                            TimeSpan dts = effectiveAccel.Timestamp.Subtract(prevAccel.Timestamp);
+                            double dt = dts.TotalSeconds;
+
+                            Vector3 currentUp = Vector3.up;
+                            Vector3 localAccelUp = myoToUnity(effectiveAccel.Accelerometer).normalized;
+                            Vector3 accelup = transform.InverseTransformDirection(localAccelUp);
+
+                            float angle = Vector3.Angle(currentUp, accelup);
+                            Vector3 axis = new Vector3(-accelup.z, 0, accelup.x); // TODO this axis may not be correct
+
+                            //TODO this quaternion may be flipped. check it.
+                            Quaternion correction = Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), axis);
+
+
+                            transform.localRotation = correction * transform.localRotation;
+
+                            
+                        } else if (moveWithGyro) {
+                            // TODO calculate and apply
+                            Debug.LogError("Events are not ordered. TODO order them!");
+                            throw new System.NotImplementedException();
+                        }
+                    }
+
+                } //this leaves effective gyro and accel set. what I should do is to initialize them in the very first use. 
             }
 
 
@@ -187,38 +279,45 @@ public class GyroscopeIntegrator : MonoBehaviour {
             Quaternion slerp = Quaternion.Slerp(q1, q2, .5f);
             return slerp * slerp;
         }
+    }
 
+    static private Vector3 myoToUnity(Vector3 myo) {
+        return new Vector3(-myo.y, myo.z, myo.x);
+    }
+
+    static private Vector3 myoToUnity(Thalmic.Myo.Vector3 myo) {
+        return new Vector3(-myo.Y, myo.Z, myo.X);
     }
 
     private void gyroscopeReceived(object sender, GyroscopeDataEventArgs e) {
         lock (_lock) {
             gyroscopeEvents.Add(e);
 
-            if (firstGyroMeasurement) {
-                firstGyroMeasurement = false;
-            } else {
-                TimeSpan dt = e.Timestamp.Subtract(lastTimeStamp);
-                Thalmic.Myo.Vector3 avg = (e.Gyroscope + lastGyroscope) * .5f;
+            //if (firstGyroMeasurement) {
+            //    firstGyroMeasurement = false;
+            //} else {
+            //    TimeSpan dt = e.Timestamp.Subtract(lastTimeStamp);
+            //    Thalmic.Myo.Vector3 avg = (e.Gyroscope + lastGyroscope) * .5f;
 
-                double dts = dt.TotalSeconds;
+            //    double dts = dt.TotalSeconds;
 
-                double rx = avg.X * dts;
-                double ry = avg.Y * dts;
-                double rz = avg.Z * dts;
+            //    double rx = avg.X * dts;
+            //    double ry = avg.Y * dts;
+            //    double rz = avg.Z * dts;
 
-                double magnitude = Math.Sqrt(rx * rx + ry * ry + rz * rz);
-                Vector3 myoAxis = new Vector3((float)(rx / magnitude), (float)(ry / magnitude), (float)(rz / magnitude));
-                Vector3 axis = new Vector3(-myoAxis.y, myoAxis.z, myoAxis.x);
-                float angle = (float)magnitude;
+            //    double magnitude = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+            //    Vector3 myoAxis = new Vector3((float)(rx / magnitude), (float)(ry / magnitude), (float)(rz / magnitude));
+            //    Vector3 axis = new Vector3(-myoAxis.y, myoAxis.z, myoAxis.x);
+            //    float angle = (float)magnitude;
 
-                Quaternion dq = Quaternion.AngleAxis(angle, axis);
+            //    Quaternion dq = Quaternion.AngleAxis(angle, axis);
 
-                cumulativeDq = cumulativeDq * dq;
-                cumulativeHasQ = true;
-            }
+            //    cumulativeDq = cumulativeDq * dq;
+            //    cumulativeHasQ = true;
+            //}
 
-            lastTimeStamp = e.Timestamp;
-            lastGyroscope = e.Gyroscope;
+            //lastTimeStamp = e.Timestamp;
+            //lastGyroscope = e.Gyroscope;
             ++gyroscopeDataCount;
         }
     }
