@@ -15,7 +15,7 @@ public class GyroscopeIntegrator : MonoBehaviour {
     public Transform accelerometerLowpass;
     public Transform complementaryFilter;
 
-    static float lowpassNewContribution = 0.02f;
+    static float lowpassNewContribution = .99f;
     static float lowpassOldContribution = 1 - lowpassNewContribution;
 
     private Object _lock = new Object();
@@ -57,157 +57,102 @@ public class GyroscopeIntegrator : MonoBehaviour {
             enforceOrder(gyroscopeEvents);
             enforceOrder(accelerometerEvents);
 
-            if (preciseModeDesired) {
 
-                //   for each time duration, 
-                //     integrate gyro (avg with last value for area)
-                //     mix it with accelerometer
+            var gyroEnum = gyroscopeEvents.GetEnumerator();
+            var accelEnum = accelerometerEvents.GetEnumerator();
 
-                //  gyro says we'll move with this
-                //  accelerometer says get a bit close to this
-                //  we will mix the two to move.
+            bool gyroHasNext = gyroEnum.MoveNext();
+            bool accelHasNext = accelEnum.MoveNext();
 
-                // for every time region, there is a gyro and an accel. what I'll do is cut time to those steps and use the vals. 
-                // and do this efficiently
+            while (gyroHasNext || accelHasNext) {
+                bool useGyro = false;
+                bool useAccel = false;
 
-                var gyroEnum = gyroscopeEvents.GetEnumerator();
-                var accelEnum = accelerometerEvents.GetEnumerator();
-
-                bool gyroHasNext = gyroEnum.MoveNext();
-                bool accelHasNext = accelEnum.MoveNext();
-
-                while (gyroHasNext && accelHasNext) {
-
-                    // now use the current items. use the one with the earlier time. 
+                if (gyroHasNext && accelHasNext) {
                     int gyroIsLater = DateTime.Compare(gyroEnum.Current.Timestamp, accelEnum.Current.Timestamp);
                     if (gyroIsLater == 0) {
                         // both are at the same time
-                        effectiveGyro = gyroEnum.Current;
-                        effectiveAccel = accelEnum.Current;
-
-                        gyroHasNext = gyroEnum.MoveNext();
-                        accelHasNext = accelEnum.MoveNext();
+                        useGyro = true;
+                        useAccel = true;
                     } else if (gyroIsLater > 0) {
                         // accel is before
-                        effectiveAccel = accelEnum.Current;
-
-                        accelHasNext = accelEnum.MoveNext();
+                        useAccel = true;
                     } else {
                         // gyro is before
-                        effectiveGyro = gyroEnum.Current;
-
-                        gyroHasNext = gyroEnum.MoveNext();
+                        useGyro = true;
                     }
-                    // by now, I should 
-                    // have the effective value for both
-                    // have the necessary one(s) advance
+                } else {
+                    useGyro = gyroHasNext;
+                    useAccel = accelHasNext;
+                }
 
-                    if (effectiveGyro != null && effectiveAccel != null) {
-                        // use them.
+                bool moveWithGyro = false;
+                bool moveWithAccel = false;
+
+                // by now, I should 
+                // have the effective value for both
+                // have the necessary one(s) advance
+
+                if (useGyro) {
+                    prevGyro = effectiveGyro;
+                    effectiveGyro = gyroEnum.Current;
+                    gyroHasNext = gyroEnum.MoveNext();
+
+                    if (prevGyro != null) {
+                        moveWithGyro = true;
                     }
+                }
 
+                if (useAccel) {
+                    prevAccel = effectiveAccel; 
+                    effectiveAccel = accelEnum.Current;
+                    accelHasNext = accelEnum.MoveNext();
 
-                } //this leaves effective gyro and accel set. what I should do is to initialize them in the very first use. 
+                    moveWithAccel = true;
+                }
 
+                if (moveWithGyro && moveWithAccel) {
+                    // TODO average the two and apply
+                    Debug.LogError("Events are not ordered. TODO order them!");
+                    throw new System.NotImplementedException();
+                } else {
+                    if (moveWithAccel) {
+                        // TODO calculate and apply (time will go in here, will scale the contrib.)
 
+                        Debug.Log("move with accel");
 
+                        // currentup should always be Vector3.up
+                        // localaccelup should be the vector in local coords. this is what we read. 
+                        // accelup should be that vector in global space
+                        // this does not require matrix inversion. good. 
 
-            } else {
-                var gyroEnum = gyroscopeEvents.GetEnumerator();
-                var accelEnum = accelerometerEvents.GetEnumerator();
+                        TimeSpan dts = effectiveAccel.Timestamp.Subtract(prevAccel.Timestamp);
+                        double dt = dts.TotalSeconds;
 
-                bool gyroHasNext = gyroEnum.MoveNext();
-                bool accelHasNext = accelEnum.MoveNext();
+                        Vector3 currentUp = Vector3.up;
+                        Vector3 localAccelUp = myoToUnity(effectiveAccel.Accelerometer).normalized;
+                        Vector3 accelup = transform.InverseTransformDirection(localAccelUp);
 
-                while (gyroHasNext || accelHasNext) {
-                    bool useGyro = false;
-                    bool useAccel = false;
+                        float angle = Vector3.Angle(currentUp, accelup);
+                        Vector3 axis = new Vector3(-accelup.z, 0, accelup.x); // TODO this axis may not be correct
 
-                    if (gyroHasNext && accelHasNext) {
-                        int gyroIsLater = DateTime.Compare(gyroEnum.Current.Timestamp, accelEnum.Current.Timestamp);
-                        if (gyroIsLater == 0) {
-                            // both are at the same time
-                            useGyro = true;
-                            useAccel = true;
-                        } else if (gyroIsLater > 0) {
-                            // accel is before
-                            useAccel = true;
-                        } else {
-                            // gyro is before
-                            useGyro = true;
-                        }
-                    } else {
-                        useGyro = gyroHasNext;
-                        useAccel = accelHasNext;
-                    }
+                        //TODO this quaternion may be flipped. check it.
+                        Quaternion correction = Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), axis);
 
-                    bool moveWithGyro = false;
-                    bool moveWithAccel = false;
-
-                    // by now, I should 
-                    // have the effective value for both
-                    // have the necessary one(s) advance
-
-                    if (useGyro) {
-                        prevGyro = effectiveGyro;
-                        effectiveGyro = gyroEnum.Current;
-                        gyroHasNext = gyroEnum.MoveNext();
-
-                        if (prevGyro != null) {
-                            moveWithGyro = true;
-                        }
-                    }
-
-                    if (useAccel) {
-                        prevAccel = effectiveAccel; 
-                        effectiveAccel = accelEnum.Current;
-                        accelHasNext = accelEnum.MoveNext();
-
-                        moveWithAccel = true;
-                    }
-
-                    if (moveWithGyro && moveWithAccel) {
-                        // TODO average the two and apply
+                        accelerometerLowpass.localRotation = correction * accelerometerLowpass.localRotation;
+                        // TODO test this accelerometer thing first. then, merge it with gyro.
+                            
+                    } else if (moveWithGyro) {
+                        // TODO calculate and apply
                         Debug.LogError("Events are not ordered. TODO order them!");
                         throw new System.NotImplementedException();
-                    } else {
-                        if (moveWithAccel) {
-                            // TODO calculate and apply (time will go in here, will scale the contrib.)
-
-                            Debug.Log("move with accel");
-
-                            // currentup should always be Vector3.up
-                            // localaccelup should be the vector in local coords. this is what we read. 
-                            // accelup should be that vector in global space
-                            // this does not require matrix inversion. good. 
-
-                            TimeSpan dts = effectiveAccel.Timestamp.Subtract(prevAccel.Timestamp);
-                            double dt = dts.TotalSeconds;
-
-                            Vector3 currentUp = Vector3.up;
-                            Vector3 localAccelUp = myoToUnity(effectiveAccel.Accelerometer).normalized;
-                            Vector3 accelup = transform.InverseTransformDirection(localAccelUp);
-
-                            float angle = Vector3.Angle(currentUp, accelup);
-                            Vector3 axis = new Vector3(-accelup.z, 0, accelup.x); // TODO this axis may not be correct
-
-                            //TODO this quaternion may be flipped. check it.
-                            Quaternion correction = Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), axis);
-
-
-                            transform.localRotation = correction * transform.localRotation;
-
-                            
-                        } else if (moveWithGyro) {
-                            // TODO calculate and apply
-                            Debug.LogError("Events are not ordered. TODO order them!");
-                            throw new System.NotImplementedException();
-                        }
                     }
+                }
 
-                } //this leaves effective gyro and accel set. what I should do is to initialize them in the very first use. 
-            }
+            } //this leaves effective gyro and accel set. what I should do is to initialize them in the very first use. 
 
+            gyroscopeEvents.Clear();
+            accelerometerEvents.Clear();
 
             // eat up the data. 
             // I have a couple of gyro and accel readings 
@@ -219,13 +164,13 @@ public class GyroscopeIntegrator : MonoBehaviour {
 
             Debug.Log(gyroscopeDataCount + " " + accelerometerDataCount);
             gyroscopeDataCount = accelerometerDataCount = 0;
-            if (gyroscopeIntegrated != null) {
-                if (cumulativeHasQ) {
-                    gyroscopeIntegrated.localRotation = gyroscopeIntegrated.localRotation * cumulativeDq;
-                    cumulativeDq = Quaternion.identity;
-                    cumulativeHasQ = false;
-                }
-            }
+            //if (gyroscopeIntegrated != null) {
+            //    if (cumulativeHasQ) {
+            //        gyroscopeIntegrated.localRotation = gyroscopeIntegrated.localRotation * cumulativeDq;
+            //        cumulativeDq = Quaternion.identity;
+            //        cumulativeHasQ = false;
+            //    }
+            //}
         }
     }
 
