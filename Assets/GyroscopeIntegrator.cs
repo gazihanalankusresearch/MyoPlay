@@ -15,8 +15,8 @@ public class GyroscopeIntegrator : MonoBehaviour {
     public Transform accelerometerLowpass;
     public Transform complementaryFilter;
 
-    static float lowpassNewContribution = .99f;
-    static float lowpassOldContribution = 1 - lowpassNewContribution;
+    public float lowpassNewContribution = 5f;
+    //static float lowpassOldContribution = 1 - lowpassNewContribution;
 
     private Object _lock = new Object();
 
@@ -24,7 +24,7 @@ public class GyroscopeIntegrator : MonoBehaviour {
     List<AccelerometerDataEventArgs> accelerometerEvents = new List<AccelerometerDataEventArgs>();
 
     public void Start() {
-        //thalmicMyo.internalMyo.GyroscopeData += gyroscopeReceived;
+        thalmicMyo.internalMyo.GyroscopeData += gyroscopeReceived;
         thalmicMyo.internalMyo.AccelerometerData += accelerometerReceived;
     }
 
@@ -38,6 +38,14 @@ public class GyroscopeIntegrator : MonoBehaviour {
     GyroscopeDataEventArgs prevGyro;
     AccelerometerDataEventArgs prevAccel;
 
+    private void applyAccelCorrection(Transform transform, Quaternion correction) {
+        transform.localRotation = transform.localRotation * correction;
+    }
+
+    private void applyGyroChange(Transform transform, Quaternion change) {
+        transform.localRotation = transform.localRotation * change;
+    }
+
     public void Update() {
         lock (_lock) {
             // we sure can't do it online since we need to know the next gyroscope reading
@@ -47,7 +55,6 @@ public class GyroscopeIntegrator : MonoBehaviour {
             // 2. imprecise mode 
 
             // precise mode is confusing. may not even exist...
-            bool preciseModeDesired = false;
 
 
             // make sure the values are ordered in time, so that we can merge them. 
@@ -97,8 +104,9 @@ public class GyroscopeIntegrator : MonoBehaviour {
                     prevGyro = effectiveGyro;
                     effectiveGyro = gyroEnum.Current;
                     gyroHasNext = gyroEnum.MoveNext();
-
+                    Debug.Log("1");
                     if (prevGyro != null) {
+                        Debug.Log("2");
                         moveWithGyro = true;
                     }
                 }
@@ -108,13 +116,33 @@ public class GyroscopeIntegrator : MonoBehaviour {
                     effectiveAccel = accelEnum.Current;
                     accelHasNext = accelEnum.MoveNext();
 
-                    moveWithAccel = true;
+                    Debug.Log("3");
+                    if (prevAccel != null) {
+                        Debug.Log("4");
+                        moveWithAccel = true;
+                    }
                 }
 
                 if (moveWithGyro && moveWithAccel) {
-                    // TODO average the two and apply
-                    Debug.LogError("Events are not ordered. TODO order them!");
-                    throw new System.NotImplementedException();
+                    // TODO think about averaging these two
+                    if (accelerometerLowpass != null) {
+                        Quaternion accelCorrectionForAccelOnly = calculateCorrectionForAccel(prevAccel, effectiveAccel, accelerometerLowpass);
+                        applyAccelCorrection(accelerometerLowpass, accelCorrectionForAccelOnly);
+                    }
+                    
+                    if (complementaryFilter != null) {
+                        Quaternion accelCorrectionForComplOnly = calculateCorrectionForAccel(prevAccel, effectiveAccel, complementaryFilter);
+                        applyAccelCorrection(complementaryFilter, accelCorrectionForComplOnly);
+
+                        Quaternion gyroChange = calculateChangeForGyro(prevGyro, effectiveGyro);
+                        applyGyroChange(complementaryFilter, gyroChange);
+                    }
+
+                    if (gyroscopeIntegrated != null) {
+                        Quaternion gyroChange = calculateChangeForGyro(prevGyro, effectiveGyro);
+                        applyGyroChange(gyroscopeIntegrated, gyroChange);
+                    }
+
                 } else {
                     if (moveWithAccel) {
                         // TODO calculate and apply (time will go in here, will scale the contrib.)
@@ -126,26 +154,33 @@ public class GyroscopeIntegrator : MonoBehaviour {
                         // accelup should be that vector in global space
                         // this does not require matrix inversion. good. 
 
-                        TimeSpan dts = effectiveAccel.Timestamp.Subtract(prevAccel.Timestamp);
-                        double dt = dts.TotalSeconds;
+                        if (accelerometerLowpass != null) {
+                            Quaternion accelCorrectionForAccelOnly = calculateCorrectionForAccel(prevAccel, effectiveAccel, accelerometerLowpass);
+                            //this is the actual one
+                            applyAccelCorrection(accelerometerLowpass, accelCorrectionForAccelOnly);
+                            // TODO test this accelerometer thing first. then, merge it with gyro.
+                        }
 
-                        Vector3 currentUp = Vector3.up;
-                        Vector3 localAccelUp = myoToUnity(effectiveAccel.Accelerometer).normalized;
-                        Vector3 accelup = transform.InverseTransformDirection(localAccelUp);
+                        if (complementaryFilter != null) {
+                            Quaternion accelCorrectionForComplOnly = calculateCorrectionForAccel(prevAccel, effectiveAccel, complementaryFilter);
+                            applyAccelCorrection(complementaryFilter, accelCorrectionForComplOnly);
+                        }
 
-                        float angle = Vector3.Angle(currentUp, accelup);
-                        Vector3 axis = new Vector3(-accelup.z, 0, accelup.x); // TODO this axis may not be correct
-
-                        //TODO this quaternion may be flipped. check it.
-                        Quaternion correction = Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), axis);
-
-                        accelerometerLowpass.localRotation = correction * accelerometerLowpass.localRotation;
-                        // TODO test this accelerometer thing first. then, merge it with gyro.
-                            
                     } else if (moveWithGyro) {
                         // TODO calculate and apply
-                        Debug.LogError("Events are not ordered. TODO order them!");
-                        throw new System.NotImplementedException();
+                        Debug.Log("move with gyro");
+
+                        if (gyroscopeIntegrated != null) {
+                            Quaternion gyroChange = calculateChangeForGyro(prevGyro, effectiveGyro);
+                            applyGyroChange(gyroscopeIntegrated, gyroChange);
+                        }
+
+                        if (complementaryFilter != null) {
+                            //this is the actual one
+                            // TODO test this accelerometer thing first. then, merge it with gyro.
+                            Quaternion gyroChange = calculateChangeForGyro(prevGyro, effectiveGyro);
+                            applyGyroChange(complementaryFilter, gyroChange);
+                        }
                     }
                 }
 
@@ -162,8 +197,11 @@ public class GyroscopeIntegrator : MonoBehaviour {
             //     use 
 
 
-            Debug.Log(gyroscopeDataCount + " " + accelerometerDataCount);
-            gyroscopeDataCount = accelerometerDataCount = 0;
+            //Debug.Log(gyroscopeDataCount + " " + accelerometerDataCount);
+            //gyroscopeDataCount = accelerometerDataCount = 0;
+
+
+
             //if (gyroscopeIntegrated != null) {
             //    if (cumulativeHasQ) {
             //        gyroscopeIntegrated.localRotation = gyroscopeIntegrated.localRotation * cumulativeDq;
@@ -172,6 +210,101 @@ public class GyroscopeIntegrator : MonoBehaviour {
             //    }
             //}
         }
+    }
+
+    private Quaternion calculateChangeForGyro(GyroscopeDataEventArgs prev, GyroscopeDataEventArgs effective) {
+        TimeSpan dt = effective.Timestamp.Subtract(prev.Timestamp);
+        Thalmic.Myo.Vector3 avg = (effective.Gyroscope + prev.Gyroscope) * .5f;
+
+        double dts = dt.TotalSeconds;
+
+        double rx = avg.X * dts;
+        double ry = avg.Y * dts;
+        double rz = avg.Z * dts;
+
+        double magnitude = Math.Sqrt(rx * rx + ry * ry + rz * rz);
+        Vector3 myoAxis = new Vector3((float)(rx / magnitude), (float)(ry / magnitude), (float)(rz / magnitude));
+        Vector3 axis = new Vector3(-myoAxis.y, myoAxis.z, myoAxis.x);
+        float angle = (float)magnitude;
+
+        Quaternion dq = Quaternion.AngleAxis(angle, axis);
+
+        return dq;
+    }
+
+    private Quaternion calculateCorrectionForAccel(AccelerometerDataEventArgs prev, AccelerometerDataEventArgs effective, Transform currentTransform) {
+        TimeSpan dts = effective.Timestamp.Subtract(prev.Timestamp);
+        double dt = dts.TotalSeconds;
+
+        // make this local
+        // we have a local up vector. draw it. 
+
+
+        // TODO this needs to be a rotation taht will be applied after the current orientation. right now it isn't. fix it. 
+
+        // this is more like desiredLocalAccelUp. so, turn this to become the actual local up
+        Vector3 localAccelUp = myoToUnity(effective.Accelerometer);
+        Debug.DrawRay(currentTransform.position, localAccelUp, Color.red, Time.deltaTime, false);
+        localAccelUp.Normalize();
+
+        //// these are the same. proof. 
+        //Debug.Log(currentTransform.position);
+        //Debug.Log(currentTransform.localToWorldMatrix.GetColumn(3));
+        //Debug.Log(currentTransform.forward);
+        //Debug.Log(currentTransform.localToWorldMatrix.GetColumn(2));
+
+        //yvec = M . loccurrup. so, the middle row of rot mat
+        //this is the current actual up, in local coordinates
+        Vector3 localCurrentWorldUp = currentTransform.localToWorldMatrix.GetRow(1);
+        //Vector3 localCurrentUp = currentTransform.localToWorldMatrix.GetRow(1);
+        Vector3 actualCurrentWorldUp = currentTransform.TransformDirection(localCurrentWorldUp);
+        //Debug.DrawRay(currentTransform.position, localCurrentUp, Color.cyan, Time.deltaTime, false);
+        //Debug.DrawRay(currentTransform.position, actualCurrentUp, Color.white, Time.deltaTime, false);
+        // so, I'll turn so that localAccelUp becomes localCurrentWorldUp. this is a rotation in local coords.
+        // I can find that axis easily in world coords, since localCurrentWorldUp is world's Vector3.up 
+
+        Debug.Log(currentTransform.name);
+        Vector3 worldAccelUp = currentTransform.TransformDirection(localAccelUp);
+        // turn this to be y
+
+        // like LaValle says. same because left hand rule AND left handed coord frame.
+        Vector3 axis = new Vector3(-worldAccelUp.z, 0, worldAccelUp.x); // TODO this axis may not be correct
+        // TODO the only uncertainty that I have is this angle calculation. maybe I should calculate it myself? since its wrt Vector3.up?
+        float angle = Vector3.Angle(worldAccelUp, Vector3.up);
+
+        // now, transform this axis into local coords, and apply the rotation there 
+
+        Vector3 localAxis = currentTransform.InverseTransformDirection(axis);
+
+        //Debug.DrawRay(currentTransform.position, worldAccelUp, Color.blue, Time.deltaTime, false);
+        Debug.DrawRay(currentTransform.position, localCurrentWorldUp, Color.white, Time.deltaTime, false);
+        Debug.DrawRay(currentTransform.position, localAxis, Color.green, Time.deltaTime, false);
+
+        Debug.Log("angle " + angle);
+        // now do the rotation in local coords
+
+        return Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), localAxis.normalized);
+        //return Quaternion.identity;
+
+
+
+        //Vector3 currentUp = Vector3.up;
+        //Vector3 accelup = currentTransform.TransformDirection(localAccelUp);
+
+        //float angle = Vector3.Angle(currentUp, accelup);
+        //Vector3 axis = new Vector3(-accelup.z, 0, accelup.x); // TODO this axis may not be correct
+        //axis.Normalize();
+        ////TODO normalize axis?
+        ////Debug.DrawRay(currentTransform.position, currentUp, Color.white, Time.deltaTime, false);
+        ////Debug.DrawRay(currentTransform.position, accelup, Color.red, Time.deltaTime, false);
+        ////Debug.DrawRay(currentTransform.position, axis, Color.blue, Time.deltaTime, false);
+
+        ////TODO this quaternion may be flipped. check it.
+        //Quaternion correction = Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), axis);
+        ////here I will set it immediately to debug it
+        ////accelerometerLowpass.localRotation = Quaternion.AngleAxis(angle, axis);
+        //correction = Quaternion.identity;
+        //return correction;
     }
 
     private void enforceOrder<T>(List<T> someList) where T : Thalmic.Myo.MyoEventArgs {
@@ -263,7 +396,9 @@ public class GyroscopeIntegrator : MonoBehaviour {
 
             //lastTimeStamp = e.Timestamp;
             //lastGyroscope = e.Gyroscope;
-            ++gyroscopeDataCount;
+
+
+            //++gyroscopeDataCount;
         }
     }
 
