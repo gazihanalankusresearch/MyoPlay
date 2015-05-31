@@ -104,9 +104,9 @@ public class GyroscopeIntegrator : MonoBehaviour {
                     prevGyro = effectiveGyro;
                     effectiveGyro = gyroEnum.Current;
                     gyroHasNext = gyroEnum.MoveNext();
-                    Debug.Log("1");
+                    //Debug.Log("1");
                     if (prevGyro != null) {
-                        Debug.Log("2");
+                        //Debug.Log("2");
                         moveWithGyro = true;
                     }
                 }
@@ -116,9 +116,9 @@ public class GyroscopeIntegrator : MonoBehaviour {
                     effectiveAccel = accelEnum.Current;
                     accelHasNext = accelEnum.MoveNext();
 
-                    Debug.Log("3");
+                    //Debug.Log("3");
                     if (prevAccel != null) {
-                        Debug.Log("4");
+                        //Debug.Log("4");
                         moveWithAccel = true;
                     }
                 }
@@ -227,7 +227,8 @@ public class GyroscopeIntegrator : MonoBehaviour {
         Vector3 axis = new Vector3(-myoAxis.y, myoAxis.z, myoAxis.x);
         float angle = (float)magnitude;
 
-        Quaternion dq = Quaternion.AngleAxis(angle, axis);
+        // Unity is left handed. therefore the angle should be reversed. 
+        Quaternion dq = Quaternion.AngleAxis(-angle, axis);
 
         return dq;
     }
@@ -263,7 +264,6 @@ public class GyroscopeIntegrator : MonoBehaviour {
         // so, I'll turn so that localAccelUp becomes localCurrentWorldUp. this is a rotation in local coords.
         // I can find that axis easily in world coords, since localCurrentWorldUp is world's Vector3.up 
 
-        Debug.Log(currentTransform.name);
         Vector3 worldAccelUp = currentTransform.TransformDirection(localAccelUp);
         // turn this to be y
 
@@ -280,7 +280,8 @@ public class GyroscopeIntegrator : MonoBehaviour {
         Debug.DrawRay(currentTransform.position, localCurrentWorldUp, Color.white, Time.deltaTime, false);
         Debug.DrawRay(currentTransform.position, localAxis, Color.green, Time.deltaTime, false);
 
-        Debug.Log("angle " + angle);
+        //Debug.Log(currentTransform.name);
+        //Debug.Log("angle " + angle);
         // now do the rotation in local coords
 
         return Quaternion.AngleAxis((float)(angle * lowpassNewContribution * dt), localAxis.normalized);
